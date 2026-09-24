@@ -1,0 +1,57 @@
+# k8s/api.yaml — Agent Relay Deployment + Service + ConfigMap
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+data:
+  RELAY_DATABASE_URL: "postgresql+psycopg://relay:relay@postgres:5432/agentrelay"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-relay-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-relay-api
+  template:
+    metadata:
+      labels:
+        app: agent-relay-api
+    spec:
+      containers:
+        - name: api
+          image: agent-relay:local   # loaded into kind with `kind load docker-image`
+          imagePullPolicy: Never     # use the image loaded locally into kind; don't pull from registry
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: api-config
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-relay-api
+spec:
+  selector:
+    app: agent-relay-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP

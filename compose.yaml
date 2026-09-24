@@ -1,0 +1,43 @@
+# Agent Relay – Docker Compose stack
+#
+# Usage:
+#   docker compose up --build          # start everything
+#   docker compose down -v             # stop and wipe the postgres volume
+#
+# Integration tests (from a separate terminal):
+#   uv run pytest test_scenario1_integration.py -v -s
+#
+# Query postgres directly:
+#   docker compose exec postgres psql -U relay -d agentrelay
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: agentrelay
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay -d agentrelay"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"   # optional: expose so you can connect from the host too
+
+  api:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # "postgres" is the hostname – Docker Compose service name = DNS name
+      RELAY_DATABASE_URL: postgresql+psycopg://relay:relay@postgres:5432/agentrelay
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

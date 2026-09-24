@@ -1,0 +1,75 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+          POSTGRES_DB: agentrelay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run unit tests
+        run: uv run pytest test_main.py test_storage.py test_worker.py -v
+
+      - name: Run integration tests against PostgreSQL
+        env:
+          RELAY_DATABASE_URL: postgresql+psycopg://relay:relay@localhost:5432/agentrelay
+        run: uv run pytest test_scenario1_integration.py -v -s
+
+  deploy:
+    name: Build & Deploy to Kind
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t agent-relay:local .
+
+      - name: Create k8s Kind Cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: agent-relay
+
+      - name: Load image into Kind
+        run: kind load docker-image agent-relay:local --name agent-relay
+
+      - name: Deploy to Kind
+        run: |
+          kubectl apply -f k8s/
+          kubectl wait --for=condition=ready pod -l app=postgres --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=agent-relay-api --timeout=120s
+          kubectl get pods,svc,pvc

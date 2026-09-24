@@ -1,0 +1,24 @@
+# Python / uv artefacts
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# SQLite databases (ephemeral; use -v /data for persistence)
+*.db
+*.db-shm
+*.db-wal
+
+# Credential files
+*-credentials.json
+
+# Dev / editor noise
+.git/
+.gitignore
+.python-version
+README.md
+SPEC.md
+
+# Test files – not needed in the image
+test_*.py

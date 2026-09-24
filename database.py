@@ -1,9 +1,9 @@
-"""SQLite database setup and durable Agent Relay models.
+"""Database setup and durable Agent Relay models.
 
-This module is intentionally the only place that knows about SQLite connection
-pragmas and its writer-lock transaction.  The rest of the application talks to
-the models through :mod:`storage`; replacing this module with a PostgreSQL
-engine and a row-locking claim transaction is the planned student exercise.
+Supports SQLite (default, zero-config) and PostgreSQL (set RELAY_DATABASE_URL
+to a postgresql+psycopg://... URL).  SQLite uses a BEGIN IMMEDIATE writer
+transaction for atomic claims; PostgreSQL uses standard transactions with
+FOR UPDATE SKIP LOCKED row-locking in the claim query.
 """
 
 from __future__ import annotations
@@ -44,8 +44,12 @@ def utcnow() -> datetime:
 
 
 def as_db_time(value: datetime) -> datetime:
-    """SQLite's DateTime implementation is most portable with naive UTC."""
+    """Normalise a datetime for storage.
 
+    SQLite's DateTime type is most portable with naive UTC datetimes.
+    PostgreSQL's timestamptz column accepts and returns timezone-aware values;
+    we store naive UTC there too so queries are consistent across backends.
+    """
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
@@ -134,6 +138,10 @@ def _is_sqlite(url: str) -> bool:
     return url.startswith("sqlite")
 
 
+def _is_postgres(url: str) -> bool:
+    return url.startswith("postgresql") or url.startswith("postgres")
+
+
 engine_kwargs: dict[str, Any] = {"future": True, "pool_pre_ping": True}
 if _is_sqlite(DATABASE_URL):
     engine_kwargs.update({"connect_args": {"check_same_thread": False, "timeout": 30}})
@@ -177,19 +185,21 @@ def db_session() -> Generator[Session, None, None]:
 
 @contextmanager
 def immediate_transaction() -> Generator[Session, None, None]:
-    """Run one SQLite writer transaction before selecting or changing work.
+    """Atomic writer transaction used for claims, heartbeats, and recovery.
 
-    SQLite does not support PostgreSQL's ``FOR UPDATE SKIP LOCKED``.  A
-    ``BEGIN IMMEDIATE`` writer reservation serializes claims (and recovery or
-    terminal submissions) across API processes, giving each task one active
-    lease.  This is the intentionally isolated seam for a future PostgreSQL
-    implementation.
+    * SQLite: issues ``BEGIN IMMEDIATE`` to serialise writers across processes
+      (SQLite has no ``FOR UPDATE SKIP LOCKED``).
+    * PostgreSQL: uses a plain ``BEGIN`` / ``COMMIT``; row-level locking is
+      achieved by the ``FOR UPDATE SKIP LOCKED`` clause in :func:`claim_one`.
     """
 
     connection = engine.connect()
     session = Session(bind=connection, expire_on_commit=False, autoflush=True)
     try:
-        connection.exec_driver_sql("BEGIN IMMEDIATE")
+        if _is_sqlite(DATABASE_URL):
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        else:
+            connection.exec_driver_sql("BEGIN")
         yield session
         session.flush()
         connection.commit()
