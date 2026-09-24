@@ -42,7 +42,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Run unit tests
-        run: uv run pytest test_main.py test_storage.py test_worker.py -v
+        run: uv run pytest test_agent_relay.py -v
 
       - name: Run integration tests against PostgreSQL
         env:
@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Docker image
-        run: docker build -t agent-relay:local .
+        run: docker build -t agent-relay:${{ github.sha }} .
 
       - name: Create k8s Kind Cluster
         uses: helm/kind-action@v1.10.0
@@ -65,11 +65,13 @@ jobs:
           cluster_name: agent-relay
 
       - name: Load image into Kind
-        run: kind load docker-image agent-relay:local --name agent-relay
+        run: kind load docker-image agent-relay:${{ github.sha }} --name agent-relay
 
       - name: Deploy to Kind
         run: |
+          # Inject the unique tag into the manifest
+          sed -i "s/agent-relay:local/agent-relay:${{ github.sha }}/g" k8s/api.yaml
           kubectl apply -f k8s/
           kubectl wait --for=condition=ready pod -l app=postgres --timeout=120s
-          kubectl wait --for=condition=ready pod -l app=agent-relay-api --timeout=120s
+          kubectl rollout status deployment/agent-relay-api --timeout=120s
           kubectl get pods,svc,pvc
