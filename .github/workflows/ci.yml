@@ -47,7 +47,11 @@ jobs:
       - name: Run integration tests against PostgreSQL
         env:
           RELAY_DATABASE_URL: postgresql+psycopg://relay:relay@localhost:5432/agentrelay
-        run: uv run pytest test_scenario1_integration.py -v -s
+        run: |
+          PYTHONUNBUFFERED=1 uv run uvicorn main:app --port 8000 > server.log 2>&1 &
+          for i in {1..15}; do curl -s http://127.0.0.1:8000/ready && break || sleep 1; done
+          cat server.log
+          uv run pytest test_scenario1_integration.py -v -s
 
   deploy:
     name: Build & Deploy to Kind
@@ -60,9 +64,15 @@ jobs:
         run: docker build -t agent-relay:${{ github.sha }} .
 
       - name: Create k8s Kind Cluster
-        uses: helm/kind-action@v1.10.0
-        with:
-          cluster_name: agent-relay
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x ./kubectl
+          sudo mv ./kubectl /usr/local/bin/kubectl || mv ./kubectl /usr/local/bin/kubectl
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.22.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind || mv ./kind /usr/local/bin/kind
+          kind delete cluster --name agent-relay || true
+          kind create cluster --name agent-relay
 
       - name: Load image into Kind
         run: kind load docker-image agent-relay:${{ github.sha }} --name agent-relay
@@ -72,6 +82,6 @@ jobs:
           # Inject the unique tag into the manifest
           sed -i "s/agent-relay:local/agent-relay:${{ github.sha }}/g" k8s/api.yaml
           kubectl apply -f k8s/
-          kubectl wait --for=condition=ready pod -l app=postgres --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=postgres --timeout=120s || kubectl rollout status statefulset/postgres --timeout=120s
           kubectl rollout status deployment/agent-relay-api --timeout=120s
           kubectl get pods,svc,pvc

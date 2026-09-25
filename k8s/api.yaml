@@ -23,7 +23,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: agent-relay:local   # loaded into kind with `kind load docker-image`
+          image: agent-relay:abf36b53593471915622b4040f26557551a36acc   # loaded into kind with `kind load docker-image`
           imagePullPolicy: Never     # use the image loaded locally into kind; don't pull from registry
           ports:
             - containerPort: 8000
